@@ -2,11 +2,7 @@ import numpy as np
 import sys
 import os
 import pickle
-import time
-import threading
 from classes.network import SelfModifyingNetwork
-from setup.gpu_config import get_device_config
-
 
 # Custom unpickler to handle module path changes
 class ModuleRenameUnpickler(pickle.Unpickler):
@@ -19,6 +15,9 @@ class ModuleRenameUnpickler(pickle.Unpickler):
         # Also handle old 'class.' prefix
         elif module.startswith('class.'):
             module = module.replace('class.', 'classes.')
+        # Handle gpu_config moved to setup folder
+        elif module == 'gpu_config':
+            module = 'setup.gpu_config'
         return super().find_class(module, name)
 
 
