@@ -328,7 +328,8 @@ class SelfModifyingNetwork:
         """Train meta-learner on modification history."""
         X, y = self.modification_tracker.get_training_data()
         if X.shape[0] >= 20:  # Need at least 20 examples
-            self.meta_learner.train(X, y, epochs=5, batch_size=16)
+            stats = self.meta_learner.train(X, y, epochs=5, batch_size=16)
+            print(f"[Meta Learning] Steps {self.training_steps} | Samples={stats['samples']} Loss={stats['loss']:.4f} Accuracy={stats['accuracy']:.3f}")
     
     def _modify_structure_intelligent(self):
         """

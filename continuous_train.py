@@ -3,6 +3,7 @@ import sys
 import os
 import pickle
 from classes.network import SelfModifyingNetwork
+from setup.gpu_config import get_device_config
 
 # Custom unpickler to handle module path changes
 class ModuleRenameUnpickler(pickle.Unpickler):

@@ -142,7 +142,7 @@ class MetaLearner:
         
         return loss, accuracy
         
-    def train(self, X: np.ndarray, y: np.ndarray, epochs: int = 10, batch_size: int = 32):
+    def train(self, X: np.ndarray, y: np.ndarray, epochs: int = 10, batch_size: int = 32) -> Dict:
         """
         Train the meta-learner on modification history.
         
@@ -151,11 +151,16 @@ class MetaLearner:
             y: Target labels (n_samples,)
             epochs: Number of training epochs
             batch_size: Batch size for mini-batch training
+            
+        Returns:
+            Dictionary with training statistics
         """
         if X.shape[0] == 0:
-            return
+            return {'samples': 0, 'loss': 0.0, 'accuracy': 0.0}
             
         n = X.shape[0]
+        all_losses = []
+        all_accs = []
         
         for epoch in range(epochs):
             # Shuffle data
@@ -174,6 +179,16 @@ class MetaLearner:
                 loss, acc = self.train_step(X_batch, y_batch)
                 epoch_losses.append(loss)
                 epoch_accs.append(acc)
+            
+            all_losses.extend(epoch_losses)
+            all_accs.extend(epoch_accs)
+        
+        return {
+            'samples': n,
+            'loss': np.mean(all_losses),
+            'accuracy': np.mean(all_accs),
+            'epochs': epochs
+        }
                 
     def get_strategy_scores(self, network_state: Dict) -> Dict[ModificationType, float]:
         """

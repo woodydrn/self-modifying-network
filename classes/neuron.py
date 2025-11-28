@@ -58,7 +58,7 @@ class Neuron:
         self.bias = np.zeros(output_dim)
         
         # Learning parameters - much more aggressive
-        self.activation_threshold = 0.01  # Nearly always activate
+        self.activation_threshold = 0.5  # Tag similarity threshold for selective activation
         self.learning_rate = 0.1  # Much higher learning rate for actual learning
         
         # Performance tracking
@@ -133,10 +133,10 @@ class Neuron:
         Returns:
             Output vector if activated, None if silent
         """
-        # ALWAYS activate - tag-based activation disabled for better learning
-        # if not self.should_activate(input_tag):
-        #     self.was_active = False
-        #     return None
+        # Tag-based selective activation - only activate if tag similarity is high enough
+        if not self.should_activate(input_tag):
+            self.was_active = False
+            return None
         
         # Neuron activates
         self.was_active = True

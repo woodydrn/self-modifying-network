@@ -114,7 +114,7 @@ Edit `continuous_train.py` to adjust:
 - **Learning Rate** - 0.1 (aggressive for fast learning)
 - **Gradient Clipping** - ±5.0 to prevent explosion
 - **Weight Clipping** - ±20.0 to allow sufficient range
-- **Activation Threshold** - 0.01 (nearly all neurons fire - tag routing disabled for better learning)
+- **Activation Threshold** - 0.5 (neurons activate when tag similarity exceeds this threshold)
 
 ### 6. Modification Timing
 - **Check Interval** - Every 5000 steps (allows ~100 batches of learning before structure changes)
@@ -303,7 +303,7 @@ Output includes:
 ## Implementation Notes
 
 ### Tag System
-The network uses 4D tag vectors for neuron identity and routing. Tags are primarily used for neuron initialization and identification. **Note:** Tag-based selective activation is currently disabled for better gradient flow - all neurons participate in forward/backward passes.
+The network uses 4D tag vectors for neuron identity and routing. Tags enable selective activation where neurons only fire when their functional tag matches the input tag with sufficient similarity (threshold 0.5). This creates sparse, efficient activation patterns.
 
 ### Activation Flow
 1. Input `x` converted to tag via random projection (for neuron initialization)
@@ -365,7 +365,7 @@ Saved network to network_checkpoint.pkl
 - Verify gradient clipping not too tight (±5.0 recommended)
 - Ensure weight clipping allows sufficient range (±20.0)
 - Confirm activation functions: tanh for hidden, linear for output
-- Check that tag-based selective activation is disabled (all neurons should fire)
+- Check that tag-based selective activation is enabled (only neurons with matching tags should fire)
 
 ### Network exploding to large values
 - Reduce learning rate (try 0.01 or 0.001)
@@ -406,13 +406,13 @@ Key innovations:
 - Activation: tanh (hidden), linear (output)
 - Gradient clip: ±5.0
 - Weight clip: ±20.0
-- Tag-based selective activation: **DISABLED** (all neurons always fire)
+- Tag-based selective activation: **ENABLED** (threshold 0.5)
 - Rollback: **DISABLED** (allows exploration)
 - Modification interval: 5000 steps
 - Tasks: Addition (0-18) and Division (0.1-9), 50/50 split
 
 **Recent Fixes:**
-- Disabled tag-based sparse activation to enable gradient flow
+- Re-enabled tag-based selective activation (threshold 0.5)
 - Adjusted learning rate from 0.5 → 0.1
 - Loosened weight clipping from ±10 → ±20
 - Increased modification interval from 300 → 5000 steps
@@ -421,7 +421,7 @@ Key innovations:
 
 ## Future Directions
 
-- Re-enable selective tag-based activation once basic learning works
+- Experiment with different activation thresholds for optimal sparsity/performance tradeoff
 - Implement adaptive learning rate schedules
 - Add more sophisticated modification strategies
 - Experiment with different activation functions
