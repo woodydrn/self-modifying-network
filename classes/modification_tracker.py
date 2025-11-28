@@ -280,7 +280,7 @@ class ModificationTracker:
         """
         Extract feature vector from a modification record.
         
-        Features (14 total):
+        Features (15 total):
         - avg_reward (1)
         - avg_error (1)
         - reward_trend (1)
@@ -289,12 +289,13 @@ class ModificationTracker:
         - steps_since_last_mod (1)
         - modification_type one-hot (7)
         - network_age (1)
+        - plateau_detected (1)
         
         Args:
             record: Modification record
             
         Returns:
-            Feature vector (14 dimensions)
+            Feature vector (15 dimensions)
         """
         state = record.network_state_before
         
@@ -315,6 +316,9 @@ class ModificationTracker:
         
         # Network age
         features.append(state.get('network_age', 0))
+        
+        # Plateau detection signal
+        features.append(state.get('plateau_detected', 0.0))
         
         return np.array(features)
         

@@ -11,19 +11,19 @@ class MetaLearner:
     in which network states. This enables intelligent strategy selection.
     
     Architecture: 2-layer MLP with 32 hidden units
-    Input: Network state + proposed modification type (14 features)
+    Input: Network state + proposed modification type (15 features)
     Output: Success probability (0-1)
     """
     
     def __init__(self, 
-                 input_dim: int = 14,
+                 input_dim: int = 15,
                  hidden_dim: int = 32,
                  learning_rate: float = 0.01):
         """
         Initialize the meta-learner.
         
         Args:
-            input_dim: Number of input features (default 14)
+            input_dim: Number of input features (default 15)
             hidden_dim: Number of hidden units (default 32)
             learning_rate: Learning rate for training
         """
@@ -48,7 +48,7 @@ class MetaLearner:
         Predict success probability for a modification.
         
         Args:
-            features: Feature vector (14 dimensions)
+            features: Feature vector (15 dimensions)
             
         Returns:
             Success probability (0-1)
@@ -69,7 +69,7 @@ class MetaLearner:
         Predict success probabilities for multiple modifications.
         
         Args:
-            X: Feature matrix (n_samples, 14)
+            X: Feature matrix (n_samples, 15)
             
         Returns:
             Success probabilities (n_samples,)
@@ -89,7 +89,7 @@ class MetaLearner:
         Perform one training step.
         
         Args:
-            X: Feature matrix (n_samples, 14)
+            X: Feature matrix (n_samples, 15)
             y: Target labels (n_samples,) - 1.0 for success, 0.0 for failure
             
         Returns:
@@ -147,7 +147,7 @@ class MetaLearner:
         Train the meta-learner on modification history.
         
         Args:
-            X: Feature matrix (n_samples, 14)
+            X: Feature matrix (n_samples, 15)
             y: Target labels (n_samples,)
             epochs: Number of training epochs
             batch_size: Batch size for mini-batch training
@@ -221,7 +221,7 @@ class MetaLearner:
         """
         Create feature vector for a proposed modification.
         
-        Features (14 total):
+        Features (15 total):
         - avg_reward (1)
         - avg_error (1)
         - reward_trend (1)
@@ -230,13 +230,14 @@ class MetaLearner:
         - steps_since_last_mod (1)
         - modification_type one-hot (7)
         - network_age (1)
+        - plateau_detected (1) - indicates if stuck in local minimum
         
         Args:
             network_state: Current network state
             modification_type: Type of modification being proposed
             
         Returns:
-            Feature vector (14 dimensions)
+            Feature vector (15 dimensions)
         """
         features = [
             network_state.get('avg_reward', 0.0),
@@ -255,6 +256,10 @@ class MetaLearner:
         
         # Network age
         features.append(network_state.get('network_age', 0))
+        
+        # Plateau detection - crucial signal for meta-learner
+        # When stuck, meta-learner should prefer more aggressive strategies
+        features.append(network_state.get('plateau_detected', 0.0))
         
         return np.array(features)
         

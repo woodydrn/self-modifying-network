@@ -4,6 +4,8 @@ import os
 import pickle
 from classes.network import SelfModifyingNetwork
 from setup.gpu_config import get_device_config
+from torch.utils.tensorboard import SummaryWriter
+from datetime import datetime
 
 # Custom unpickler to handle module path changes
 class ModuleRenameUnpickler(pickle.Unpickler):
@@ -28,11 +30,17 @@ class ModuleRenameUnpickler(pickle.Unpickler):
 
 CHECKPOINT_DIR = "checkpoints"
 NETWORK_CHECKPOINT = os.path.join(CHECKPOINT_DIR, "network_state.pkl")
+TENSORBOARD_LOG_DIR = "runs"  # TensorBoard logs directory
 
 SAMPLES_PER_BATCH = 50  # Train on this many samples before stats update
 SAVE_INTERVAL_BATCHES = 100  # Auto-save every N batches
 MAX_DIGIT = 3  # Maximum digit for operations
 PRINT_INTERVAL = 10  # Print stats every N batches
+
+# Plateau detection - helps meta-learner know when stuck
+PLATEAU_WINDOW = 50  # Window for detecting stagnation
+PLATEAU_THRESHOLD = 0.005  # Variance threshold for plateau detection
+STUCK_THRESHOLD = 3  # Consecutive plateau detections = stuck
 
 
 # ============================================================================
@@ -100,7 +108,7 @@ def generate_random_sample(max_digit=9):
 class ContinuousTrainer:
     """Manages continuous training in background thread."""
     
-    def __init__(self, network):
+    def __init__(self, network, use_tensorboard=True):
         self.network = network
         self.running = False
         self.batch_count = 0
@@ -110,6 +118,33 @@ class ContinuousTrainer:
         self.recent_rewards = []
         self.recent_errors = []
         
+        # Plateau detection for meta-learner
+        self.reward_history = []
+        self.plateau_counter = 0
+        self.is_stuck = False
+        
+        # TensorBoard logging
+        self.use_tensorboard = use_tensorboard
+        if use_tensorboard:
+            run_name = f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            log_path = os.path.join(TENSORBOARD_LOG_DIR, run_name)
+            self.writer = SummaryWriter(log_path)
+            print(f"  📊 TensorBoard logging to: {log_path}")
+            print(f"     View with: tensorboard --logdir={TENSORBOARD_LOG_DIR}")
+        else:
+            self.writer = None
+        
+    def detect_plateau(self):
+        """Detect if network is stuck in local minimum."""
+        if len(self.reward_history) < PLATEAU_WINDOW:
+            return False
+        
+        # Check variance in recent reward history
+        recent = self.reward_history[-PLATEAU_WINDOW:]
+        variance = np.var(recent)
+        
+        return variance < PLATEAU_THRESHOLD
+    
     def train_batch(self, batch_size=SAMPLES_PER_BATCH):
         """Train on a batch of random samples."""
         batch_rewards = []
@@ -127,8 +162,59 @@ class ContinuousTrainer:
         avg_error = self.network.reward_function.get_average_error(50)
         self.recent_rewards.append(avg_reward)
         self.recent_errors.append(avg_error)
+        self.reward_history.append(avg_reward)
+        
+        # Keep history bounded
+        if len(self.reward_history) > PLATEAU_WINDOW * 2:
+            self.reward_history = self.reward_history[-PLATEAU_WINDOW * 2:]
+        
+        # Detect plateau and inform network
+        if self.batch_count % 10 == 0:  # Check every 10 batches
+            if self.detect_plateau():
+                self.plateau_counter += 1
+                if self.plateau_counter >= STUCK_THRESHOLD:
+                    if not self.is_stuck:
+                        print(f"\n  ⚠️  PLATEAU DETECTED - Meta-learner will prioritize exploration")
+                        self.is_stuck = True
+                    # Signal to network that we're stuck (meta-learner will adapt)
+                    if hasattr(self.network, 'plateau_detected'):
+                        self.network.plateau_detected = True
+            else:
+                # Making progress
+                if self.plateau_counter > 0:
+                    self.plateau_counter = 0
+                if self.is_stuck:
+                    print(f"\n  ✓ Escaped plateau - normal learning resumed")
+                    self.is_stuck = False
+                if hasattr(self.network, 'plateau_detected'):
+                    self.network.plateau_detected = False
+        
+        # Log to TensorBoard
+        if self.writer:
+            step = self.network.training_steps
+            self.writer.add_scalar('Training/Reward', avg_reward, step)
+            self.writer.add_scalar('Training/Error', avg_error, step)
+            self.writer.add_scalar('Training/Plateau_Detected', float(self.is_stuck), step)
+            
+            # Log network structure
+            stats = self.network.get_network_stats()
+            self.writer.add_scalar('Network/Total_Neurons', stats['total_neurons'], step)
+            self.writer.add_scalar('Network/Total_Layers', stats['total_layers'], step)
+            
+            # Log plateau metrics
+            if len(self.reward_history) >= PLATEAU_WINDOW:
+                variance = np.var(self.reward_history[-PLATEAU_WINDOW:])
+                self.writer.add_scalar('Training/Reward_Variance', variance, step)
         
         return avg_reward, avg_error
+    
+    def log_modification(self, mod_type, success):
+        """Log network modifications to TensorBoard."""
+        if self.writer:
+            step = self.network.training_steps
+            self.writer.add_scalar('Modifications/Event', 1.0, step)
+            self.writer.add_text('Modifications/Type', str(mod_type), step)
+            self.writer.add_scalar('Modifications/Success', float(success), step)
     
     def print_status(self):
         """Print current training status."""
@@ -147,6 +233,13 @@ class ContinuousTrainer:
               f"Layers={stats['total_layers']} | "
               f"Neurons={stats['total_neurons']} | "
               f"{layer_info}")
+        
+        # Log to TensorBoard
+        if self.writer:
+            step = self.network.training_steps
+            # Log per-layer neuron counts
+            for i, layer in enumerate(stats['layer_stats']):
+                self.writer.add_scalar(f'Network/Layer_{i}_Neurons', layer['total_neurons'], step)
     
     def run_continuous(self):
         """Main continuous training loop."""
@@ -173,6 +266,9 @@ class ContinuousTrainer:
             print("\n\n⚠ Training stopped by user")
             self.running = False
             save_network(self.network)
+            if self.writer:
+                self.writer.close()
+                print("  📊 TensorBoard logs saved")
     
     def test_network(self, n_tests=20):
         """Test the network on random problems."""
@@ -219,6 +315,13 @@ class ContinuousTrainer:
         print(f"Addition Accuracy: {addition_correct}/{n_tests//2} ({addition_correct*100/(n_tests//2):.1f}%)")
         print(f"Division Accuracy: {division_correct}/{n_tests//2} ({division_correct*100/(n_tests//2):.1f}%)")
         print("="*70 + "\n")
+        
+        # Log test results to TensorBoard
+        if self.writer:
+            step = self.network.training_steps
+            self.writer.add_scalar('Test/Addition_Accuracy', addition_correct*100/(n_tests//2), step)
+            self.writer.add_scalar('Test/Division_Accuracy', division_correct*100/(n_tests//2), step)
+            self.writer.add_scalar('Test/Overall_Accuracy', (addition_correct + division_correct)*100/n_tests, step)
 
 
 # ============================================================================

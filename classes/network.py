@@ -60,7 +60,7 @@ class SelfModifyingNetwork:
         
         # Meta-learning components
         self.modification_tracker = ModificationTracker(max_history=1000)
-        self.meta_learner = MetaLearner(input_dim=14, hidden_dim=32, learning_rate=0.01)
+        self.meta_learner = MetaLearner(input_dim=15, hidden_dim=32, learning_rate=0.01)
         
         # Training state
         self.training_steps = 0
@@ -70,6 +70,7 @@ class SelfModifyingNetwork:
         self.network_snapshot = None  # For rollback
         self.pre_modification_reward = 0.0
         self.steps_since_modification = 0
+        self.plateau_detected = False  # Set by trainer when stuck in local minimum
         
         # Structure modification parameters
         self.min_layers = 1
@@ -321,7 +322,8 @@ class SelfModifyingNetwork:
             'neuron_count': sum(layer.get_neuron_count() for layer in self.layers),
             'layer_count': len(self.layers),
             'steps_since_last_mod': self.steps_since_modification,
-            'network_age': self.training_steps
+            'network_age': self.training_steps,
+            'plateau_detected': float(self.plateau_detected)  # Signal to meta-learner when stuck
         }
     
     def _train_meta_learner(self):
@@ -391,9 +393,19 @@ class SelfModifyingNetwork:
     def _is_strategy_valid(self, strategy: ModificationType) -> bool:
         """Check if a strategy can be applied to current network."""
         if strategy == ModificationType.ADD_NEURON:
-            return any(layer.get_neuron_count() < self.max_neurons_per_layer for layer in self.layers)
+            # Need at least one hidden layer and space to grow
+            if len(self.layers) < 3:  # Need input + hidden + output
+                return False
+            return any(layer.get_neuron_count() < self.max_neurons_per_layer 
+                      for i, layer in enumerate(self.layers) 
+                      if i > 0 and i < len(self.layers) - 1)  # Only check hidden layers
         elif strategy == ModificationType.REMOVE_NEURON:
-            return any(layer.get_neuron_count() > self.min_neurons_per_layer for layer in self.layers)
+            # Need at least one hidden layer with removable neurons
+            if len(self.layers) < 3:
+                return False
+            return any(layer.get_neuron_count() > self.min_neurons_per_layer 
+                      for i, layer in enumerate(self.layers) 
+                      if i > 0 and i < len(self.layers) - 1)  # Only check hidden layers
         elif strategy == ModificationType.ADD_LAYER:
             return len(self.layers) < self.max_layers
         elif strategy == ModificationType.REMOVE_LAYER:
@@ -430,6 +442,10 @@ class SelfModifyingNetwork:
         candidates = []
         
         for layer_id, layer in enumerate(self.layers):
+            # Skip first and last layer (input/output layers should be stable)
+            if layer_id == 0 or layer_id == len(self.layers) - 1:
+                continue
+                
             if layer.get_neuron_count() >= self.max_neurons_per_layer:
                 continue
             
@@ -482,6 +498,10 @@ class SelfModifyingNetwork:
     def _strategy_remove_neuron(self) -> bool:
         """Strategy: Remove underperforming neuron."""
         for layer_id, layer in enumerate(self.layers):
+            # Skip first and last layer (input/output layers should be stable)
+            if layer_id == 0 or layer_id == len(self.layers) - 1:
+                continue
+                
             if layer.get_neuron_count() <= self.min_neurons_per_layer:
                 continue
             

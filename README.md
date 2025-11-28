@@ -25,6 +25,7 @@ python check_gpu.py
 This is a unique neural network architecture featuring:
 
 - **GPU Acceleration** - Leverage NVIDIA GPUs for 10-50x faster training
+- **TensorBoard Visualization** - Real-time monitoring of training metrics and network evolution
 - **Continuous Learning** - Trains forever like a human brain, automatically saves/loads checkpoints
 - **Meta-Learning System** - Learns which structural modifications work best and applies them intelligently
 - **Intelligent Self-Modification** - 6 different strategies (add/remove neurons/layers, rewire, adjust thresholds)
@@ -53,24 +54,61 @@ python continuous_train.py --test
 - Auto-saves every 100 batches
 - Prints progress every 10 batches
 - Press Ctrl+C to stop safely (auto-saves on exit)
-- Network learns both addition (0-18 range) and division (0.1-9 range)
+- Network learns both addition (0-6 range) and division (0.1-3 range)
+- **TensorBoard logging** for real-time visualization
+
+### TensorBoard Visualization
+
+Monitor training in real-time with TensorBoard:
+
+```bash
+# Option 1: Use the launch script (Windows)
+.\launch_tensorboard.ps1
+
+# Option 2: Run manually
+tensorboard --logdir=runs
+
+# Option 3: With specific port
+tensorboard --logdir=runs --port=6006
+
+# Then open http://localhost:6006 in your browser
+```
+
+**Available Metrics:**
+- **Training/** - Reward, Error, Plateau detection, Reward variance
+- **Network/** - Total neurons, Total layers, Per-layer neuron counts
+- **Modifications/** - Modification events, types, and success rates
+- **Test/** - Addition/Division/Overall accuracy
+
+Each training run creates a timestamped log directory in `runs/`.
+
+**Tips:**
+- Run TensorBoard in a separate terminal while training
+- Metrics update in real-time as the network trains
+- Compare multiple runs to see which configurations work best
+- Plateau detection shows when the network gets stuck
 
 ### Configuration
 
 Edit `continuous_train.py` to adjust:
 - `SAMPLES_PER_BATCH = 50` - Samples per training batch
 - `SAVE_INTERVAL_BATCHES = 100` - How often to auto-save
-- `MAX_DIGIT = 9` - Maximum digit for math problems
+- `MAX_DIGIT = 3` - Maximum digit for math problems (0-3 range)
 - `PRINT_INTERVAL = 10` - How often to print stats
+- `PLATEAU_WINDOW = 50` - Window for detecting stagnation
+- `PLATEAU_THRESHOLD = 0.005` - Variance threshold for plateau detection
+- `STUCK_THRESHOLD = 3` - Consecutive plateau detections = stuck
 
 ## Key Features
 
 ### 1. Meta-Learning System
 - **Modification Tracker** - Records all structural changes with 100-step reward trajectories
-- **Meta-Learner Network** - 2-layer MLP predicts success probability of each strategy
+- **Meta-Learner Network** - 2-layer MLP (15 features → 32 hidden → 1 output) predicts success probability
+- **Plateau Detection** - Monitors reward variance to detect when stuck in local minima
 - **Intelligent Selection** - ε-greedy (90% exploit best, 10% explore random)
 - **Success Classification** - Modifications marked successful if reward improves after 50 steps
 - **Training Data Extraction** - Converts modification history to features for meta-learner
+- **Plateau-Aware Decisions** - Meta-learner receives plateau signal and learns which strategies escape local minima
 
 **Modification Strategies:**
 1. `ADD_NEURON` - Adds neuron to struggling layer (inherits weights from best parent)
@@ -80,20 +118,27 @@ Edit `continuous_train.py` to adjust:
 5. `REWIRE_CONNECTIONS` - Changes cross-layer routing based on proximity
 6. `ADJUST_THRESHOLDS` - Increases/decreases activation thresholds
 
-### 2. Rollback Mechanism
+### 2. Plateau Detection & Escape
+- **Variance Monitoring** - Tracks reward variance over 50-batch window
+- **Stagnation Detection** - Flags plateau when variance < 0.005
+- **Meta-Learner Signal** - Plateau state included in 15-feature vector
+- **Learned Escape Strategies** - Meta-learner learns which modifications work when stuck
+- **No Random Exploration** - All decisions driven by meta-learner's learned experience
+
+### 3. Rollback Mechanism
 - **Snapshot System** - Saves network state before each modification
 - **50-Step Monitoring** - Tracks reward trajectory after change
 - **Automatic Revert** - Rolls back if reward drops significantly (>0.5 on -1/0/+1 scale)
 - **Completion Logging** - Records whether modification was kept or rolled back
 
-### 3. Continuous Learning Architecture
+### 4. Continuous Learning Architecture
 - **No Epochs** - Trains on infinite stream of random problems
 - **Batch-Based** - Processes 50 samples per batch
 - **Mixed Task Sampling** - 50/50 split between addition and division
 - **Checkpoint System** - Saves full network state (weights, structure, meta-learner, tracker)
 - **Resume Training** - Seamlessly continues from last checkpoint
 
-### 4. Reward System
+### 5. Reward System
 - **Simplified Scoring** - Returns +1 (good), 0 (neutral), or -1 (bad)
 - **Error-Based Classification** - Compares prediction error to target magnitude
 - **Threshold Levels:**
@@ -104,7 +149,7 @@ Edit `continuous_train.py` to adjust:
   - Bad: >50% error → -1
   - Terrible: >100% error → -1
 
-### 5. Network Architecture Details
+### 6. Network Architecture Details
 - **Initial Structure** - 2 layers, 8 neurons per layer
 - **Activation Functions:**
   - Hidden layers: `tanh(x)` - bounded, smooth gradients
@@ -113,10 +158,10 @@ Edit `continuous_train.py` to adjust:
 - **Output Bias Init** - 9.0 (middle of 0-18 target range)
 - **Learning Rate** - 0.1 (aggressive for fast learning)
 - **Gradient Clipping** - ±5.0 to prevent explosion
-- **Weight Clipping** - ±20.0 to allow sufficient range
+  - Weight Clipping** - ±20.0 to allow sufficient range
 - **Activation Threshold** - 0.5 (neurons activate when tag similarity exceeds this threshold)
 
-### 6. Modification Timing
+### 7. Modification Timing
 - **Check Interval** - Every 5000 steps (allows ~100 batches of learning before structure changes)
 - **Rollback Disabled** - Currently disabled to allow exploration during early training
 - **Max Layers** - 5 layers maximum
@@ -198,10 +243,12 @@ Prediction (0-18 for addition, 0.1-9 for division)
 - Statistics by modification type
 
 **`meta_learner.py`** - Meta-Learning Network
-- 2-layer MLP (14 features → 32 hidden → 1 output)
-- Predicts modification success probability
+- 2-layer MLP (15 features → 32 hidden → 1 output)
+- Features include: reward, error, trends, network size, modification type, **plateau detection**
+- Predicts modification success probability (0-1 score)
 - Trains on historical modification data
-- Guides strategy selection
+- Learns which strategies escape local minima
+- Guides intelligent strategy selection
 
 **`continuous_train.py`** - Continuous Training Script
 - Infinite training loop
@@ -323,9 +370,12 @@ The network uses 4D tag vectors for neuron identity and routing. Tags enable sel
 ### Meta-Learning System
 - 2-layer MLP predicts modification success
 - Trained on historical modification outcomes
-- Features include: reward trends, network size, modification type
-- Selects from 6 strategies: add neuron, remove neuron, add layer, remove layer, rewire, adjust learning
+- **15 Features**: reward, error, trends, network size, modification type, **plateau_detected**
+- Plateau feature signals when stuck in local minimum
+- Learns from experience which strategies work when stuck vs normal learning
+- Selects from 6 strategies: add neuron, remove neuron, add layer, remove layer, rewire, adjust thresholds
 - Trains every 500 steps on accumulated modification history
+- **No random exploration** - all decisions based on learned patterns
 
 ### Modification Strategies
 1. **Add Neuron** - Adds neuron to layer with lowest average reward
@@ -411,13 +461,51 @@ Key innovations:
 - Modification interval: 5000 steps
 - Tasks: Addition (0-18) and Division (0.1-9), 50/50 split
 
-**Recent Fixes:**
+**Recent Updates:**
+- **Plateau Detection System** - Monitors reward variance to detect local minima
+- **Meta-Learner Enhancement** - Now receives plateau signal
+- **Intelligent Escape** - Meta-learner learns which strategies work when stuck
 - Re-enabled tag-based selective activation (threshold 0.5)
 - Adjusted learning rate from 0.5 → 0.1
 - Loosened weight clipping from ±10 → ±20
 - Increased modification interval from 300 → 5000 steps
 - Disabled aggressive rollback (was 82% rollback rate)
 - Fixed output bias initialization (0 → 9.0)
+
+## Typical Workflow
+
+**1. Start Training:**
+```powershell
+# Start fresh training
+python continuous_train.py --new
+```
+
+**2. Launch TensorBoard (separate terminal):**
+```powershell
+.\launch_tensorboard.ps1
+# Open http://localhost:6006 in browser
+```
+
+**3. Monitor Progress:**
+- Watch reward/error curves in TensorBoard
+- Observe plateau detection events
+- Track network structure evolution
+- Monitor modification success rates
+
+**4. Stop and Test:**
+```powershell
+# Press Ctrl+C to stop training
+# Network auto-saves
+
+# Test the trained network
+python continuous_train.py --test
+```
+
+**5. Resume Training:**
+```powershell
+# Continue from checkpoint
+python continuous_train.py
+```
 
 ## Future Directions
 
