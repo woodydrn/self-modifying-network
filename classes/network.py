@@ -1,10 +1,12 @@
 import numpy as np
+import torch
 from typing import List, Optional, Tuple, Dict
 from .layer import AdaptiveLayer
 from .reward import GradedRewardFunction
 from .backward import IntelligentBackward
 from .modification_tracker import ModificationTracker, ModificationType, ModificationRecord
 from .meta_learner import MetaLearner
+from .neuron import DEVICE
 
 try:
     from setup.gpu_config import DeviceConfig
@@ -97,8 +99,8 @@ class SelfModifyingNetwork:
             }
             for neuron in layer.neurons:
                 neuron_state = {
-                    'weights': neuron.weights.copy(),
-                    'bias': neuron.bias.copy(),
+                    'weights': neuron.weights.data.clone(),
+                    'bias': neuron.bias.data.clone(),
                     'functional_tag': neuron.functional_tag.copy(),
                     'input_tags': [tag.copy() for tag in neuron.input_tags],
                     'output_tags': [tag.copy() for tag in neuron.output_tags],
@@ -134,8 +136,8 @@ class SelfModifyingNetwork:
                     functional_tag=neuron_state['functional_tag'].copy(),
                     is_broadcast=neuron_state['is_broadcast']
                 )
-                neuron.weights = neuron_state['weights'].copy()
-                neuron.bias = neuron_state['bias'].copy()
+                neuron.weights.data.copy_(neuron_state['weights'])
+                neuron.bias.data.copy_(neuron_state['bias'])
                 neuron.input_tags = [tag.copy() for tag in neuron_state['input_tags']]
                 neuron.output_tags = [tag.copy() for tag in neuron_state['output_tags']]
                 neuron.target_neuron_indices = neuron_state['target_neuron_indices'].copy()
@@ -168,7 +170,7 @@ class SelfModifyingNetwork:
                 for neuron in layer.neurons:
                     neuron.is_output_neuron = True
                     # Initialize output neuron bias to middle of expected range
-                    neuron.bias = np.ones_like(neuron.bias) * 9.0  # Middle of 0-18 range
+                    neuron.bias.data.fill_(9.0)  # Middle of 0-18 range
             
             current_dim = layer_output_dim
     
@@ -202,7 +204,7 @@ class SelfModifyingNetwork:
             input_tag: Optional pre-computed input tag
             
         Returns:
-            Network output
+            Network output (numpy array)
         """
         # Convert input to tag
         if input_tag is None:
@@ -218,8 +220,15 @@ class SelfModifyingNetwork:
             next_layer = self.layers[i + 1] if i < len(self.layers) - 1 else None
             output, active_indices = layer.forward(current_input, input_tag, next_layer)
             self.active_indices_history.append(active_indices)
-            current_input = output
+            # Convert torch tensor to numpy for next layer input if needed
+            if isinstance(output, torch.Tensor):
+                current_input = output.detach().cpu().numpy()
+            else:
+                current_input = output
         
+        # Ensure output is numpy array
+        if isinstance(current_input, torch.Tensor):
+            return current_input.detach().cpu().numpy()
         return current_input
     
     def predict(self, x: np.ndarray) -> np.ndarray:
@@ -331,7 +340,7 @@ class SelfModifyingNetwork:
         """Train meta-learner on modification history."""
         X, y = self.modification_tracker.get_training_data()
         if X.shape[0] >= 20:  # Need at least 20 examples
-            stats = self.meta_learner.train(X, y, epochs=5, batch_size=16)
+            stats = self.meta_learner.train_model(X, y, epochs=5, batch_size=16)
             # Stats will be displayed in the main batch output
             self.last_meta_stats = stats
         else:

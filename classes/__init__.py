@@ -12,6 +12,7 @@ from .reward import GradedRewardFunction
 from .backward import IntelligentBackward
 from .modification_tracker import ModificationTracker
 from .meta_learner import MetaLearner
+from .batched_network import BatchedSelfModifyingNetwork, BatchedLayer
 
 __all__ = [
     'SelfModifyingNetwork',
@@ -21,4 +22,6 @@ __all__ = [
     'IntelligentBackward',
     'ModificationTracker',
     'MetaLearner',
+    'BatchedSelfModifyingNetwork',
+    'BatchedLayer',
 ]

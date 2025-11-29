@@ -18,6 +18,23 @@ SAMPLES_PER_BATCH = 50  # Train on this many samples before allowing predictions
 SAVE_INTERVAL_BATCHES = 100  # Auto-save every N batches
 MAX_DIGIT = 9  # Maximum digit for operations
 
+# Addition task parameters
+ADDITION_TRAIN_SAMPLES = 1000
+ADDITION_TEST_SAMPLES = 100
+ADDITION_MAX_DIGIT = 9
+ADDITION_EPOCHS = 100
+
+# Division task parameters
+DIVISION_TRAIN_SAMPLES = 1000
+DIVISION_TEST_SAMPLES = 100
+DIVISION_MAX_DIGIT = 9
+DIVISION_EPOCHS = 100
+
+# Adaptive sampling parameters
+BASE_SAMPLES_PER_EPOCH = 100
+MIN_SAMPLES_PER_EPOCH = 50
+MAX_SAMPLES_PER_EPOCH = 300
+
 # Task types
 TASK_ADDITION = 0
 TASK_DIVISION = 1

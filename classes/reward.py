@@ -66,8 +66,8 @@ class GradedRewardFunction:
         # Compute absolute error
         abs_error = np.abs(prediction - target)
         
-        # Normalize by target magnitude (with floor to avoid division by very small numbers)
-        target_magnitude = np.maximum(np.abs(target), 1e-6)
+        # Normalize by target magnitude (use 1.0 floor to handle zero targets stably)
+        target_magnitude = np.maximum(np.abs(target), 1.0)
         relative_error = abs_error / target_magnitude
         
         # Return mean relative error for vector outputs

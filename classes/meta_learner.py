@@ -1,11 +1,18 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 from typing import Dict, List, Tuple, Optional
 from .modification_tracker import ModificationType
 
+# Check for GPU availability
+DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-class MetaLearner:
+
+class MetaLearner(nn.Module):
     """
-    A small neural network that learns to predict modification success.
+    A PyTorch-based neural network that learns to predict modification success.
+    GPU-accelerated with autograd for efficient training.
     
     Uses modification history to learn which structural changes work
     in which network states. This enables intelligent strategy selection.
@@ -18,7 +25,8 @@ class MetaLearner:
     def __init__(self, 
                  input_dim: int = 15,
                  hidden_dim: int = 32,
-                 learning_rate: float = 0.01):
+                 learning_rate: float = 0.01,
+                 device: torch.device = None):
         """
         Initialize the meta-learner.
         
@@ -26,22 +34,39 @@ class MetaLearner:
             input_dim: Number of input features (default 15)
             hidden_dim: Number of hidden units (default 32)
             learning_rate: Learning rate for training
+            device: PyTorch device (GPU/CPU)
         """
+        super().__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.learning_rate = learning_rate
+        self.device = device if device is not None else DEVICE
         
-        # Initialize weights with Xavier initialization
-        self.W1 = np.random.randn(input_dim, hidden_dim) * np.sqrt(2.0 / input_dim)
-        self.b1 = np.zeros(hidden_dim)
+        # PyTorch layers with proper initialization
+        self.fc1 = nn.Linear(input_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, 1)
         
-        self.W2 = np.random.randn(hidden_dim, 1) * np.sqrt(2.0 / hidden_dim)
-        self.b2 = np.zeros(1)
+        # Xavier initialization
+        nn.init.xavier_uniform_(self.fc1.weight)
+        nn.init.xavier_uniform_(self.fc2.weight)
+        nn.init.zeros_(self.fc1.bias)
+        nn.init.zeros_(self.fc2.bias)
+        
+        # Move to device
+        self.to(self.device)
+        
+        # Optimizer
+        self.optimizer = torch.optim.SGD(self.parameters(), lr=learning_rate)
         
         # Training statistics
         self.training_losses: List[float] = []
         self.training_accuracies: List[float] = []
         self.total_updates = 0
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through the network."""
+        h = F.relu(self.fc1(x))
+        return torch.sigmoid(self.fc2(h))
         
     def predict(self, features: np.ndarray) -> float:
         """
@@ -53,16 +78,13 @@ class MetaLearner:
         Returns:
             Success probability (0-1)
         """
-        # Ensure features is 1D
-        if features.ndim == 2:
-            features = features.flatten()
-            
-        # Forward pass
-        h = self._relu(features @ self.W1 + self.b1)
-        logit = h @ self.W2 + self.b2
-        prob = self._sigmoid(logit[0])
-        
-        return prob
+        self.eval()
+        with torch.no_grad():
+            x = torch.as_tensor(features, dtype=torch.float32, device=self.device)
+            if x.dim() == 2:
+                x = x.flatten()
+            prob = self.forward(x.unsqueeze(0))
+            return prob.item()
         
     def predict_batch(self, X: np.ndarray) -> np.ndarray:
         """
@@ -76,17 +98,16 @@ class MetaLearner:
         """
         if X.shape[0] == 0:
             return np.array([])
-            
-        # Forward pass
-        h = self._relu(X @ self.W1 + self.b1)  # (n, hidden_dim)
-        logits = h @ self.W2 + self.b2          # (n, 1)
-        probs = self._sigmoid(logits.flatten())  # (n,)
         
-        return probs
+        self.eval()
+        with torch.no_grad():
+            x = torch.as_tensor(X, dtype=torch.float32, device=self.device)
+            probs = self.forward(x)
+            return probs.squeeze(-1).cpu().numpy()
         
     def train_step(self, X: np.ndarray, y: np.ndarray) -> Tuple[float, float]:
         """
-        Perform one training step.
+        Perform one training step using autograd.
         
         Args:
             X: Feature matrix (n_samples, 15)
@@ -97,52 +118,35 @@ class MetaLearner:
         """
         if X.shape[0] == 0:
             return 0.0, 0.5
-            
-        n = X.shape[0]
         
-        # Forward pass
-        h = self._relu(X @ self.W1 + self.b1)  # (n, hidden_dim)
-        logits = h @ self.W2 + self.b2          # (n, 1)
-        probs = self._sigmoid(logits.flatten())  # (n,)
+        self.train()
+        x = torch.as_tensor(X, dtype=torch.float32, device=self.device)
+        targets = torch.as_tensor(y, dtype=torch.float32, device=self.device).unsqueeze(-1)
         
-        # Compute loss (binary cross-entropy)
-        eps = 1e-8  # Numerical stability
-        loss = -np.mean(y * np.log(probs + eps) + (1 - y) * np.log(1 - probs + eps))
+        # Forward pass with autograd
+        self.optimizer.zero_grad()
+        probs = self.forward(x)
+        loss = F.binary_cross_entropy(probs, targets)
+        
+        # Backward pass (autograd handles gradients)
+        loss.backward()
+        self.optimizer.step()
         
         # Compute accuracy
-        predictions = (probs >= 0.5).astype(float)
-        accuracy = np.mean(predictions == y)
+        with torch.no_grad():
+            predictions = (probs >= 0.5).float()
+            accuracy = (predictions == targets).float().mean().item()
         
-        # Backward pass
-        # d_loss/d_logit = prob - y
-        d_logit = (probs - y).reshape(-1, 1)  # (n, 1)
-        
-        # Gradients for W2 and b2
-        d_W2 = (h.T @ d_logit) / n  # (hidden_dim, 1)
-        d_b2 = np.mean(d_logit, axis=0)  # (1,)
-        
-        # Gradient for hidden layer
-        d_h = d_logit @ self.W2.T  # (n, hidden_dim)
-        d_h_relu = d_h * (h > 0)  # ReLU gradient
-        
-        # Gradients for W1 and b1
-        d_W1 = (X.T @ d_h_relu) / n  # (input_dim, hidden_dim)
-        d_b1 = np.mean(d_h_relu, axis=0)  # (hidden_dim,)
-        
-        # Update weights
-        self.W1 -= self.learning_rate * d_W1
-        self.b1 -= self.learning_rate * d_b1
-        self.W2 -= self.learning_rate * d_W2
-        self.b2 -= self.learning_rate * d_b2
+        loss_val = loss.item()
         
         # Track statistics
-        self.training_losses.append(loss)
+        self.training_losses.append(loss_val)
         self.training_accuracies.append(accuracy)
         self.total_updates += 1
         
-        return loss, accuracy
+        return loss_val, accuracy
         
-    def train(self, X: np.ndarray, y: np.ndarray, epochs: int = 10, batch_size: int = 32) -> Dict:
+    def train_model(self, X: np.ndarray, y: np.ndarray, epochs: int = 10, batch_size: int = 32) -> Dict:
         """
         Train the meta-learner on modification history.
         
@@ -169,19 +173,13 @@ class MetaLearner:
             y_shuffled = y[indices]
             
             # Mini-batch training
-            epoch_losses = []
-            epoch_accs = []
-            
             for i in range(0, n, batch_size):
                 X_batch = X_shuffled[i:i+batch_size]
                 y_batch = y_shuffled[i:i+batch_size]
                 
                 loss, acc = self.train_step(X_batch, y_batch)
-                epoch_losses.append(loss)
-                epoch_accs.append(acc)
-            
-            all_losses.extend(epoch_losses)
-            all_accs.extend(epoch_accs)
+                all_losses.append(loss)
+                all_accs.append(acc)
         
         return {
             'samples': n,
@@ -261,15 +259,7 @@ class MetaLearner:
         # When stuck, meta-learner should prefer more aggressive strategies
         features.append(network_state.get('plateau_detected', 0.0))
         
-        return np.array(features)
-        
-    def _relu(self, x: np.ndarray) -> np.ndarray:
-        """ReLU activation function."""
-        return np.maximum(0, x)
-        
-    def _sigmoid(self, x: np.ndarray) -> np.ndarray:
-        """Sigmoid activation function."""
-        return 1.0 / (1.0 + np.exp(-np.clip(x, -500, 500)))
+        return np.array(features, dtype=np.float32)
         
     def get_statistics(self) -> Dict:
         """
@@ -304,10 +294,12 @@ class MetaLearner:
         Args:
             filepath: Path to save weights
         """
-        np.savez(filepath,
-                W1=self.W1, b1=self.b1,
-                W2=self.W2, b2=self.b2,
-                total_updates=self.total_updates)
+        torch.save({
+            'state_dict': self.state_dict(),
+            'total_updates': self.total_updates,
+            'training_losses': self.training_losses,
+            'training_accuracies': self.training_accuracies
+        }, filepath)
                 
     def load_weights(self, filepath: str):
         """
@@ -316,9 +308,8 @@ class MetaLearner:
         Args:
             filepath: Path to load weights from
         """
-        data = np.load(filepath)
-        self.W1 = data['W1']
-        self.b1 = data['b1']
-        self.W2 = data['W2']
-        self.b2 = data['b2']
-        self.total_updates = int(data['total_updates'])
+        data = torch.load(filepath, map_location=self.device)
+        self.load_state_dict(data['state_dict'])
+        self.total_updates = data.get('total_updates', 0)
+        self.training_losses = data.get('training_losses', [])
+        self.training_accuracies = data.get('training_accuracies', [])

@@ -1,6 +1,7 @@
 import numpy as np
-from typing import List, Dict, Optional, Tuple
-from .neuron import Neuron
+import torch
+from typing import List, Dict, Optional, Tuple, Union
+from .neuron import Neuron, DEVICE
 
 
 class AdaptiveLayer:
@@ -64,9 +65,10 @@ class AdaptiveLayer:
         return vec / (np.linalg.norm(vec) + 1e-8)
     
     def forward(self, x: np.ndarray, input_tag: np.ndarray, 
-                next_layer: Optional['AdaptiveLayer'] = None) -> Tuple[np.ndarray, List[int]]:
+                next_layer: Optional['AdaptiveLayer'] = None) -> Tuple[Union[np.ndarray, torch.Tensor], List[int]]:
         """
         Forward pass through the layer with tag-based selective activation.
+        Handles both numpy arrays and torch tensors.
         
         Args:
             x: Input vector
@@ -90,9 +92,14 @@ class AdaptiveLayer:
         # If no next layer, use simple averaging
         if next_layer is None or len(active_indices) == 0:
             if len(neuron_outputs) == 0:
-                combined_output = np.zeros(self.output_dim)
+                combined_output = torch.zeros(self.output_dim, device=DEVICE)
             else:
-                combined_output = np.mean(list(neuron_outputs.values()), axis=0)
+                # Stack torch tensors and average
+                outputs_list = list(neuron_outputs.values())
+                if isinstance(outputs_list[0], torch.Tensor):
+                    combined_output = torch.stack(outputs_list).mean(dim=0)
+                else:
+                    combined_output = np.mean(outputs_list, axis=0)
         else:
             # Tag-based selective routing: each neuron sends to specific target neurons
             target_neuron_inputs = {j: [] for j in range(len(next_layer.neurons))}
@@ -110,32 +117,38 @@ class AdaptiveLayer:
                     if target_idx < len(next_layer.neurons):
                         target_neuron_inputs[target_idx].append(output)
             
-            # Combine inputs for each target neuron (use shape of first output)
+            # Combine inputs for each target neuron
             combined_output = None
             active_targets = 0
             for target_idx, inputs in target_neuron_inputs.items():
                 if len(inputs) > 0:
-                    mean_input = np.mean(inputs, axis=0)
+                    # Handle torch tensors
+                    if isinstance(inputs[0], torch.Tensor):
+                        mean_input = torch.stack(inputs).mean(dim=0)
+                    else:
+                        mean_input = np.mean(inputs, axis=0)
+                    
                     if combined_output is None:
                         combined_output = mean_input
                     else:
-                        combined_output += mean_input
+                        combined_output = combined_output + mean_input
                     active_targets += 1
             
             if combined_output is None:
-                combined_output = np.zeros(self.output_dim)
+                combined_output = torch.zeros(self.output_dim, device=DEVICE)
             elif active_targets > 0:
-                combined_output /= active_targets
+                combined_output = combined_output / active_targets
         
         self.layer_activations += 1
         return combined_output, active_indices
     
-    def backward(self, grad_output: np.ndarray, active_indices: List[int], learning_rate: float = 0.01):
+    def backward(self, grad_output, active_indices: List[int], learning_rate: float = 0.01):
         """
         Backward pass - only updates active neurons.
+        Handles both numpy arrays and torch tensors.
         
         Args:
-            grad_output: Gradient from next layer
+            grad_output: Gradient from next layer (numpy array or torch tensor)
             active_indices: Indices of neurons that were active
             learning_rate: Learning rate
             
@@ -151,8 +164,11 @@ class AdaptiveLayer:
             grad_input = self.neurons[idx].backward(grad_output, learning_rate)
             grad_inputs.append(grad_input)
         
-        # Average gradients
-        avg_grad_input = np.mean(grad_inputs, axis=0)
+        # Average gradients - handle both numpy and torch
+        if isinstance(grad_inputs[0], torch.Tensor):
+            avg_grad_input = torch.stack(grad_inputs).mean(dim=0).cpu().numpy()
+        else:
+            avg_grad_input = np.mean(grad_inputs, axis=0)
         return avg_grad_input
     
     def add_neuron(self, near_tag: Optional[np.ndarray] = None, is_broadcast: bool = False, parent_neuron: Optional['Neuron'] = None):
@@ -181,9 +197,12 @@ class AdaptiveLayer:
         
         # If parent neuron provided, copy its weights with small perturbation
         if parent_neuron is not None:
-            # Copy weights and add small random noise for variation
-            new_neuron.weights = parent_neuron.weights.copy() + np.random.randn(*parent_neuron.weights.shape) * 0.01
-            new_neuron.bias = parent_neuron.bias.copy() + np.random.randn(*parent_neuron.bias.shape) * 0.01
+            # Copy weights and add small random noise for variation (handle PyTorch tensors)
+            with torch.no_grad():
+                new_neuron.weights.data.copy_(parent_neuron.weights.data)
+                new_neuron.weights.data += torch.randn_like(new_neuron.weights.data) * 0.01
+                new_neuron.bias.data.copy_(parent_neuron.bias.data)
+                new_neuron.bias.data += torch.randn_like(new_neuron.bias.data) * 0.01
             # Copy tags with small variation
             new_neuron.functional_tag = parent_neuron.functional_tag.copy() + np.random.randn(self.tag_dim) * 0.05
             new_neuron.functional_tag /= (np.linalg.norm(new_neuron.functional_tag) + 1e-8)
@@ -388,12 +407,14 @@ class AdaptiveLayer:
         elif target_size < current_size:
             # Remove least active neurons
             activations = [(i, n.activation_count) for i, n in enumerate(self.neurons)]
-            activations.sort(key=lambda x: x[1])  # Sort by activation count
+            activations.sort(key=lambda x: x[1])  # Sort by activation count (ascending)
             
             num_to_remove = current_size - target_size
-            for i in range(num_to_remove):
-                if i < len(activations):
-                    self.remove_neuron(activations[i][0])
+            # Get indices to remove and sort in REVERSE order to avoid index shifting
+            indices_to_remove = sorted([activations[i][0] for i in range(min(num_to_remove, len(activations)))], reverse=True)
+            
+            for idx in indices_to_remove:
+                self.remove_neuron(idx)
     
     def __repr__(self):
         stats = self.get_layer_stats()

@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 from typing import List, Dict, Optional, Tuple
 from collections import defaultdict
 from .layer import AdaptiveLayer
@@ -70,16 +71,30 @@ class IntelligentBackward:
         for idx in active_indices:
             neuron = layer.neurons[idx]
             
-            if neuron.grad_weights is None or neuron.last_input is None:
+            if neuron.last_input is None:
                 continue
             
-            # Analyze gradient characteristics
-            grad_magnitude = np.linalg.norm(neuron.grad_weights)
-            grad_sparsity = np.sum(np.abs(neuron.grad_weights) < 1e-3) / neuron.grad_weights.size
+            # Get gradient magnitude from PyTorch parameters
+            if hasattr(neuron.weights, 'grad') and neuron.weights.grad is not None:
+                grad_magnitude = neuron.weights.grad.norm().item()
+                grad_sparsity = (neuron.weights.grad.abs() < 1e-3).float().mean().item()
+            else:
+                grad_magnitude = neuron.weights.data.norm().item() * 0.01  # Approximate
+                grad_sparsity = 0.5
             
-            # Analyze input/output relationship
-            input_magnitude = np.linalg.norm(neuron.last_input)
-            output_magnitude = np.linalg.norm(neuron.last_output) if neuron.last_output is not None else 0
+            # Analyze input/output relationship - handle torch tensors
+            if isinstance(neuron.last_input, torch.Tensor):
+                input_magnitude = neuron.last_input.norm().item()
+            else:
+                input_magnitude = np.linalg.norm(neuron.last_input)
+            
+            if neuron.last_output is not None:
+                if isinstance(neuron.last_output, torch.Tensor):
+                    output_magnitude = neuron.last_output.norm().item()
+                else:
+                    output_magnitude = np.linalg.norm(neuron.last_output)
+            else:
+                output_magnitude = 0
             
             # Classify role based on patterns
             role = self._classify_neuron_role(
