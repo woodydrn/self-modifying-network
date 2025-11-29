@@ -71,6 +71,7 @@ class SelfModifyingNetwork:
         self.pre_modification_reward = 0.0
         self.steps_since_modification = 0
         self.plateau_detected = False  # Set by trainer when stuck in local minimum
+        self.last_meta_stats = None  # Last meta-learner training stats
         
         # Structure modification parameters
         self.min_layers = 1
@@ -331,7 +332,10 @@ class SelfModifyingNetwork:
         X, y = self.modification_tracker.get_training_data()
         if X.shape[0] >= 20:  # Need at least 20 examples
             stats = self.meta_learner.train(X, y, epochs=5, batch_size=16)
-            print(f"[Meta Learning] Steps {self.training_steps} | Samples={stats['samples']} Loss={stats['loss']:.4f} Accuracy={stats['accuracy']:.3f}")
+            # Stats will be displayed in the main batch output
+            self.last_meta_stats = stats
+        else:
+            self.last_meta_stats = None
     
     def _modify_structure_intelligent(self):
         """

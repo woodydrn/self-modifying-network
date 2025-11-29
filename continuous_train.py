@@ -226,13 +226,22 @@ class ContinuousTrainer:
         layer_info = ", ".join([f"L{i}: {layer['total_neurons']}" 
                                 for i, layer in enumerate(stats['layer_stats'])])
         
-        print(f"[Batch {self.batch_count:5d}] "
-              f"Steps={self.network.training_steps:6d} | "
-              f"Reward={avg_reward:+.2f} | "
-              f"Error={avg_error:.4f} | "
-              f"Layers={stats['total_layers']} | "
-              f"Neurons={stats['total_neurons']} | "
-              f"{layer_info}")
+        # Build output line
+        output = (f"[Batch {self.batch_count:5d}] "
+                 f"Steps={self.network.training_steps:6d} | "
+                 f"Reward={avg_reward:+.2f} | "
+                 f"Error={avg_error:.4f} | ")
+        
+        # Add meta-learner stats if available
+        if hasattr(self.network, 'last_meta_stats') and self.network.last_meta_stats:
+            meta = self.network.last_meta_stats
+            output += f"Loss={meta['loss']:.4f} Accuracy={meta['accuracy']:.3f} | "
+        
+        output += (f"Layers={stats['total_layers']} | "
+                  f"Neurons={stats['total_neurons']} | "
+                  f"{layer_info}")
+        
+        print(output)
         
         # Log to TensorBoard
         if self.writer:
